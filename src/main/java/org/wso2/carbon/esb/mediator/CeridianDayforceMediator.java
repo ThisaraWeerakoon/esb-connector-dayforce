@@ -20,6 +20,9 @@ package org.wso2.carbon.esb.mediator;
 import org.apache.synapse.MessageContext;
 import org.apache.synapse.mediators.AbstractMediator;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
+
 /**
  * Method implementation.
  */
@@ -31,9 +34,20 @@ public class CeridianDayforceMediator extends AbstractMediator {
     @Override
     public boolean mediate(MessageContext synCtx) {
         try {
-            uriPath = synCtx.getProperty("uri.var.uriPath").toString();
+            String basePath = synCtx.getProperty("uri.var.uriPath").toString();
             clientNameSpaceKey = synCtx.getProperty("uri.var.clientNamespace").toString();
-            uriPath = uriPath + clientNameSpaceKey;
+            uriPath = basePath + clientNameSpaceKey;
+            String normalizedBase = normalizeRegistryPath(basePath);
+            String normalizedResolved = normalizeRegistryPath(uriPath);
+            if (!normalizedResolved.equals(normalizedBase)
+                    && !normalizedResolved.startsWith(normalizedBase + "/")) {
+                log.error("CERIDIAN Dayforce: rejected clientNamespace '" + clientNameSpaceKey
+                        + "' - resolved registry path '" + normalizedResolved
+                        + "' escapes the base namespace '" + normalizedBase
+                        + "'. Skipping registry write.");
+                return true;
+            }
+
             serviceUri = synCtx.getProperty("SERVICE_URI").toString() +
                     clientNameSpaceKey.substring(clientNameSpaceKey.lastIndexOf("/"));
             if (serviceUri.startsWith("http://")) {
@@ -48,5 +62,32 @@ public class CeridianDayforceMediator extends AbstractMediator {
             log.error(e.getMessage(), e);
         }
         return true;
+    }
+
+    /**
+     * Resolves "." and ".." in a '/'-separated registry path using plain string ops, so it
+     * behaves the same on every OS. Any root-escaping ".." is kept as a literal segment so
+     * such paths can never look like they're inside a valid base.
+     *
+     * @param path the raw (possibly traversal-containing) registry path
+     * @return the normalised path with redundant and traversal segments resolved
+     */
+    private static String normalizeRegistryPath(String path) {
+        Deque<String> segments = new ArrayDeque<>();
+        for (String segment : path.split("/")) {
+            if (segment.isEmpty() || ".".equals(segment)) {
+                continue;
+            }
+            if ("..".equals(segment)) {
+                if (!segments.isEmpty() && !"..".equals(segments.peekLast())) {
+                    segments.removeLast();
+                } else {
+                    segments.addLast("..");
+                }
+            } else {
+                segments.addLast(segment);
+            }
+        }
+        return String.join("/", segments);
     }
 }
